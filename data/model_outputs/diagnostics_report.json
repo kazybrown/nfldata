@@ -1,0 +1,270 @@
+{
+  "diagnostics": {
+    "step1_constraints": {
+      "teams_32": "pass",
+      "games_per_team_17": "pass",
+      "win_equivalents_272": "pass",
+      "league_pf_equals_pa": "pass",
+      "continuity_records_complete": "pass"
+    },
+    "step2_power_ratings": {
+      "pre_adjustment_league_avg_zero": "pass",
+      "pre_adjustment_avg": -5.898059818321144e-17
+    },
+    "step3_win_probability": {
+      "probability_calibration": "pass",
+      "expected_wins_272": "pass"
+    },
+    "step4_monte_carlo": {
+      "mc_total_wins_272": "pass",
+      "simulations": 20000
+    },
+    "step5_probability_accounting": {
+      "probability_integrity": "pass"
+    },
+    "step6_market_conversion": {
+      "opener_sum_approx_272": true,
+      "opener_sum": 271.0
+    },
+    "step7_publication_gate": {
+      "pass": true
+    }
+  },
+  "calibration": {
+    "spread_0.0": 0.5,
+    "spread_3.0": 0.5882510529150976,
+    "spread_7.0": 0.6986236557620502
+  },
+  "shrinkage_uncertainty": {
+    "retention_low": 0.55,
+    "retention_central": 0.65,
+    "retention_high": 0.75
+  },
+  "qb_hc_adjustment_log": [
+    {
+      "team": "ARI",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.6",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/ari/arizona-cardinals"
+    },
+    {
+      "team": "ATL",
+      "qb_status": "new_starter",
+      "qb_adjustment": "-1.8",
+      "hc_change_adjustment": "-0.7",
+      "source": "https://www.espn.com/nfl/team/_/name/atl/atlanta-falcons"
+    },
+    {
+      "team": "BAL",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "1.0",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/bal/baltimore-ravens"
+    },
+    {
+      "team": "BUF",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.9",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/buf/buffalo-bills"
+    },
+    {
+      "team": "CAR",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "-0.8",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/car/carolina-panthers"
+    },
+    {
+      "team": "CHI",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.4",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/chi/chicago-bears"
+    },
+    {
+      "team": "CIN",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.8",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/cin/cincinnati-bengals"
+    },
+    {
+      "team": "CLE",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "-0.7",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/cle/cleveland-browns"
+    },
+    {
+      "team": "DAL",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.7",
+      "hc_change_adjustment": "-0.4",
+      "source": "https://www.espn.com/nfl/team/_/name/dal/dallas-cowboys"
+    },
+    {
+      "team": "DEN",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.6",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/den/denver-broncos"
+    },
+    {
+      "team": "DET",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.8",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/det/detroit-lions"
+    },
+    {
+      "team": "GB",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.7",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/gb/green-bay-packers"
+    },
+    {
+      "team": "HOU",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.9",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/hou/houston-texans"
+    },
+    {
+      "team": "IND",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.3",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/ind/indianapolis-colts"
+    },
+    {
+      "team": "JAX",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.3",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/jax/jacksonville-jaguars"
+    },
+    {
+      "team": "KC",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "1.0",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/kc/kansas-city-chiefs"
+    },
+    {
+      "team": "LA",
+      "qb_status": "new_starter",
+      "qb_adjustment": "-1.5",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/lar/los-angeles-rams"
+    },
+    {
+      "team": "LAC",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.7",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/lac/los-angeles-chargers"
+    },
+    {
+      "team": "LV",
+      "qb_status": "new_starter",
+      "qb_adjustment": "-2.0",
+      "hc_change_adjustment": "-0.2",
+      "source": "https://www.espn.com/nfl/team/_/name/lv/las-vegas-raiders"
+    },
+    {
+      "team": "MIA",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.6",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/mia/miami-dolphins"
+    },
+    {
+      "team": "MIN",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.2",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/min/minnesota-vikings"
+    },
+    {
+      "team": "NE",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.4",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/ne/new-england-patriots"
+    },
+    {
+      "team": "NO",
+      "qb_status": "new_starter",
+      "qb_adjustment": "-1.6",
+      "hc_change_adjustment": "-0.6",
+      "source": "https://www.espn.com/nfl/team/_/name/no/new-orleans-saints"
+    },
+    {
+      "team": "NYG",
+      "qb_status": "new_starter",
+      "qb_adjustment": "-1.4",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/nyg/new-york-giants"
+    },
+    {
+      "team": "NYJ",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.2",
+      "hc_change_adjustment": "-0.3",
+      "source": "https://www.espn.com/nfl/team/_/name/nyj/new-york-jets"
+    },
+    {
+      "team": "PHI",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.8",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/phi/philadelphia-eagles"
+    },
+    {
+      "team": "PIT",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.5",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/pit/pittsburgh-steelers"
+    },
+    {
+      "team": "SEA",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.9",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/sea/seattle-seahawks"
+    },
+    {
+      "team": "SF",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.7",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/sf/san-francisco-49ers"
+    },
+    {
+      "team": "TB",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.5",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/tb/tampa-bay-buccaneers"
+    },
+    {
+      "team": "TEN",
+      "qb_status": "new_starter",
+      "qb_adjustment": "-2.2",
+      "hc_change_adjustment": "-0.5",
+      "source": "https://www.espn.com/nfl/team/_/name/ten/tennessee-titans"
+    },
+    {
+      "team": "WAS",
+      "qb_status": "returning_starter",
+      "qb_adjustment": "0.1",
+      "hc_change_adjustment": "0.0",
+      "source": "https://www.espn.com/nfl/team/_/name/wsh/washington-commanders"
+    }
+  ],
+  "publication_blocked": false
+}
