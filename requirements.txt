@@ -1,0 +1,16 @@
+# WC Odds Fetcher — Streamlit app dependencies
+#
+# The core CLI fetcher (fetch_odds.py) and odds math (wc_odds_utils.py) are PURE
+# Python standard library (urllib, csv, json) — they need nothing installed.
+#
+# The browser UI (wc_odds_app.py) is the only part that needs third-party
+# packages. Install them, then launch the app:
+#
+#   pip install -r requirements.txt
+#   streamlit run wc_odds_app.py
+#
+# Mock mode works fully offline; live mode needs ODDSPAPI_KEY in the environment
+# (or pasted into the app's sidebar) and outbound network access.
+
+streamlit>=1.28
+pandas>=2.0
