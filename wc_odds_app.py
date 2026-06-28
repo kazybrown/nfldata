@@ -22,6 +22,9 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+# Reuse the exact edge engine from the pipeline (sharp = fair line).
+from fetch_odds import cross_book_edges
+
 st.set_page_config(
     page_title="WC Odds Fetcher • R32 Pricing Desk",
     page_icon="⚽",
@@ -81,29 +84,24 @@ def load_latest_outputs() -> tuple[pd.DataFrame | None, pd.DataFrame | None, dic
     return odds_df, deriv_df, raw_data
 
 
-def detect_btts_spreads(deriv_df: pd.DataFrame) -> list[dict]:
-    """Find games with meaningful BTTS spreads (>= 30 American odds points)."""
+def detect_edges(deriv_df: pd.DataFrame, min_ev: float = 0.02) -> pd.DataFrame:
+    """Cross-book edges across EVERY derivative family: devig the sharp prices to
+    a fair line, then flag square prices that beat it (EV >= min_ev). Reuses the
+    pipeline's engine so the app and CLI agree exactly."""
     if deriv_df is None or deriv_df.empty:
-        return []
-
-    spreads = []
-    btts_yes = deriv_df[deriv_df["market"] == "btts_yes"]
-    for game_id in btts_yes["game_id"].unique():
-        game_yes = btts_yes[btts_yes["game_id"] == game_id]
-        if len(game_yes) >= 2:
-            ams = game_yes["am"].tolist()
-            if max(ams) - min(ams) >= 30:
-                lo = game_yes.loc[game_yes["am"].idxmin()]
-                hi = game_yes.loc[game_yes["am"].idxmax()]
-                spreads.append({
-                    "game_id": game_id,
-                    "low_book": lo["book"],
-                    "low_am": int(lo["am"]),
-                    "high_book": hi["book"],
-                    "high_am": int(hi["am"]),
-                    "spread": int(hi["am"] - lo["am"])
-                })
-    return spreads
+        return pd.DataFrame()
+    rows = deriv_df.to_dict("records")
+    edges = cross_book_edges(rows, min_ev=min_ev)
+    if not edges:
+        return pd.DataFrame()
+    df = pd.DataFrame(edges)
+    df["match"] = df["home"] + " v " + df["away"]
+    df["EV %"] = (df["ev"] * 100).round(1)
+    df["fair %"] = (df["fair_prob"] * 100).round(1)
+    return df[["EV %", "match", "tag_family", "market", "side",
+               "square_book", "square_am", "fair_am", "sharp_am", "fair %"]].rename(
+        columns={"tag_family": "family", "square_book": "book",
+                 "square_am": "square odds", "fair_am": "fair odds", "sharp_am": "sharp odds"})
 
 
 # ----------------------------- UI ----------------------------- #
@@ -200,10 +198,11 @@ if odds_df is not None and not odds_df.empty:
     with col3:
         st.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
 
-    # Detect cross-book edges
-    spreads = detect_btts_spreads(deriv_df) if deriv_df is not None else []
-    if spreads:
-        st.warning(f"⚠️ {len(spreads)} cross-book BTTS edge(s) detected — see Derivatives tab")
+    # Detect cross-book edges across ALL families (sharp fair vs square price)
+    edges_df = detect_edges(deriv_df) if deriv_df is not None else pd.DataFrame()
+    if not edges_df.empty:
+        st.warning(f"⚠️ {len(edges_df)} cross-book edge(s) where a square price beats the "
+                   f"sharp fair line (≥2% EV) — see Derivatives & Edges tab")
 
     tabs = st.tabs(["📊 Main Odds", "📈 Derivatives & Edges", "📦 Raw Data", "⬇️ Downloads"])
 
@@ -221,16 +220,33 @@ if odds_df is not None and not odds_df.empty:
 
     with tabs[1]:
         if deriv_df is not None and not deriv_df.empty:
-            st.dataframe(deriv_df, use_container_width=True, hide_index=True)
+            st.subheader("⚡ Cross-book edges — square price beats the sharp fair line")
+            st.caption("Sharp books (Pinnacle/Bookmaker.eu/Circa) are the fair line: their prices "
+                       "are devigged to a true probability per leg, then every square book's best "
+                       "price on that leg is checked for positive EV. Covers all families — goals, "
+                       "corners, cards, halftime, totals, team-totals, 1X2, BTTS. (Asian handicaps "
+                       "are sharp-only here, so they don't generate cross-book edges.)")
+            min_ev = st.slider("Minimum EV %", 0.0, 15.0, 2.0, 0.5,
+                               help="Only show edges at or above this expected value.") / 100.0
+            fam = st.multiselect("Families", sorted(deriv_df["market_type"].unique()),
+                                 default=sorted(deriv_df["market_type"].unique()))
+            ed = detect_edges(deriv_df, min_ev=min_ev)
+            if not ed.empty and fam:
+                ed = ed[ed["family"].isin(fam)]
+            if not ed.empty:
+                st.dataframe(ed.sort_values("EV %", ascending=False),
+                             use_container_width=True, hide_index=True,
+                             column_config={"EV %": st.column_config.NumberColumn(format="%.1f%%"),
+                                            "fair %": st.column_config.NumberColumn(format="%.1f%%")})
+                st.caption(f"{len(ed)} edge(s). 'square odds' is the offered price; 'fair odds' is the "
+                           "devigged sharp fair; positive EV means the square price pays more than fair.")
+            else:
+                st.info("No edges at this EV threshold / family filter.")
 
-            if spreads:
-                st.subheader("Cross-Book BTTS Spreads (potential edges)")
-                for s in spreads:
-                    st.write(
-                        f"**{s['game_id']}** — "
-                        f"{s['low_book']} **{s['low_am']:+d}** → {s['high_book']} **{s['high_am']:+d}** "
-                        f"(spread: **{s['spread']}** points)"
-                    )
+            st.divider()
+            st.subheader("All derivative legs")
+            st.caption(f"{len(deriv_df):,} legs across {deriv_df['book'].nunique()} books.")
+            st.dataframe(deriv_df, use_container_width=True, hide_index=True)
         else:
             st.info("No derivative data available.")
 

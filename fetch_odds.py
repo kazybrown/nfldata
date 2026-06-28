@@ -52,7 +52,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from wc_odds_utils import dec_to_am, am_to_prob, devig
+from wc_odds_utils import dec_to_am, am_to_prob, am_to_dec, devig, fair_am
 
 ODDS_OUT = "wc_odds_latest.csv"
 DERIV_OUT = "wc_book_derivatives_latest.csv"
@@ -481,20 +481,36 @@ def build_keydict(markets: dict) -> dict:
 
 def extract_derivs(markets: dict, keydict: dict) -> list[dict]:
     """Apply a keydict to one book's markets -> list of priced derivative legs
-    {category, period, market_type, line, side, am}. American odds, rounded."""
+    {category, period, market_type, line, side, am}. American odds, rounded.
+
+    Over/under and 1X2/BTTS outcome keys are globally consistent, so those legs
+    inherit the keydict's (side, line) verbatim. Asian-handicap outcome keys are
+    NOT consistent across books (the home/away+line assignment differs and a
+    book's two legs can even arbitrage), so AH legs are re-parsed from THIS
+    book's own bookmakerOutcomeId and dropped if it isn't the readable
+    '<line>/home|away' form — which, in practice, keeps AH to the sharp anchor
+    (Pinnacle) rather than emitting mislabeled square handicaps."""
     out = []
     for K, meta in keydict.items():
         mk = markets.get(K)
         if not mk:
             continue
+        is_ah = meta["market_type"] == "ah"
         ocs = mk.get("outcomes", {})
         for O, od in meta["outcomes"].items():
-            px = _dec(_player(ocs.get(O)))
+            pl = _player(ocs.get(O))
+            px = _dec(pl)
             if px is None:
                 continue
+            if is_ah:
+                side, line = _parse_boid("spreads", str((pl or {}).get("bookmakerOutcomeId", "")))
+                if side is None:                  # unreadable (non-sharp) AH boid
+                    continue
+            else:
+                side, line = od["side"], od["line"]
             out.append({"category": meta["category"], "period": meta["period"],
-                        "market_type": meta["market_type"], "line": od["line"],
-                        "side": od["side"], "am": round(dec_to_am(px))})
+                        "market_type": meta["market_type"], "line": line,
+                        "side": side, "am": round(dec_to_am(px))})
     return out
 
 
@@ -691,24 +707,126 @@ def main(argv=None):
     n_main, n_deriv = write_outputs(events)
     print(f"Wrote {n_main} games -> {ODDS_OUT}")
     print(f"Wrote {n_deriv} derivative rows -> {DERIV_OUT}")
-    # surface the cross-book BTTS spread (the documented derivative edge)
-    _report_btts_spread(events)
+    # surface cross-book value across ALL derivative families (sharp = fair line)
+    _report_edges(events)
 
 
-def _report_btts_spread(events):
-    for ev in events:
-        ys = []
-        for bk, mk in ev.get("books", {}).items():
-            if "btts" in mk:
-                ys.append((bk, dec_to_am(mk["btts"]["yes"])))
-        if len(ys) >= 2:
-            ams = [a for _, a in ys]
-            if max(ams) - min(ams) >= 30:
-                lo = min(ys, key=lambda x: x[1])
-                hi = max(ys, key=lambda x: x[1])
-                print(f"  ! BTTS-yes spread on {ev['game_id']}: "
-                      f"{lo[0]} {lo[1]:+.0f} .. {hi[0]} {hi[1]:+.0f} "
-                      f"(cross-book derivative edge)")
+# --------------------------------------------------------------------------- #
+# Cross-book edge engine — sharp price is the fair line; a square price that
+# beats it is value. Works across every derivative family produced above.
+# --------------------------------------------------------------------------- #
+# Which legs make up one two/three-way market (devig the sharp side together).
+_FAMILY_SIDES = {"total": ("over", "under"), "btts": ("yes", "no"),
+                 "1x2": ("home", "draw", "away"), "teamtotal": ("over", "under"),
+                 "ah": ("home", "away")}
+
+
+def _fline(v):
+    """Parse a line value (float, '', None, NaN, or numeric string) -> float|None."""
+    if v is None or v == "":
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f          # drop NaN (empty pandas cell)
+
+
+def _market_group(r: dict):
+    """(group_key, side) for a derivative row. group_key gathers the legs that
+    devig together; side is the leg within it. AH is grouped by its home-
+    perspective line so home -0.5 and away +0.5 form one market."""
+    cat, per, mt, side, line = (r["category"], r["period"], r["market_type"],
+                                r["side"], _fline(r.get("line")))
+    if mt == "teamtotal":                      # side like 'home_over'
+        team, ou = side.split("_", 1)
+        return (cat, per, mt, team, line), ou
+    if mt == "ah":
+        hp = line if side == "home" else (None if line is None else -line)
+        return (cat, per, mt, hp), side
+    if mt in ("btts", "1x2"):
+        return (cat, per, mt), side
+    return (cat, per, mt, line), side          # total
+
+
+def _group_label(gkey) -> str:
+    """Human market label for a group key (without the side leg)."""
+    cat, per, mt = gkey[0], gkey[1], gkey[2]
+    if mt in ("btts", "1x2"):
+        return f"{cat}_{per}_{mt}"
+    if mt == "teamtotal":
+        team, line = gkey[3], gkey[4]
+        return f"{cat}_{per}_teamtotal_{team}_{line:g}"
+    if mt == "ah":
+        return f"{cat}_{per}_ah_{(gkey[3] or 0.0):+g}"
+    return f"{cat}_{per}_total_{gkey[3]:g}"     # total
+
+
+def cross_book_edges(rows, min_ev=0.02, sharp_books=SHARP_BOOKS):
+    """Find square prices that beat the sharp fair line.
+
+    For each market (game x family x line), devig the sharp quotes (Pinnacle
+    preferred, else the sharp mean) into a fair probability per leg, then take
+    the best square price on each leg and compute EV = fair_prob * decimal - 1.
+    Returns a list of edge dicts sorted by EV descending. Push-bearing lines
+    (integer totals/AH) are screened as clean two-ways — a close approximation.
+    """
+    from collections import defaultdict
+    buckets = defaultdict(lambda: defaultdict(lambda: {"sharp": [], "square": []}))
+    meta = {}
+    for r in rows:
+        gkey, side = _market_group(r)
+        full = (r["game_id"], gkey)
+        tag = "sharp" if r["book"] in sharp_books else "square"
+        buckets[full][side][tag].append((r["book"], int(r["american"])))
+        meta[full] = (r.get("home", ""), r.get("away", ""))
+
+    edges = []
+    for (gid, gkey), sides in buckets.items():
+        order = _FAMILY_SIDES.get(gkey[2])
+        if not order or not set(order) <= set(sides):
+            continue
+        # one sharp price per leg: Pinnacle if quoted, else the sharp average.
+        sharp_px, ok = {}, True
+        for sd in order:
+            sp = sides[sd]["sharp"]
+            if not sp:
+                ok = False
+                break
+            pin = [am for bk, am in sp if bk == PREFERRED_BOOK]
+            sharp_px[sd] = pin[0] if pin else sum(a for _, a in sp) / len(sp)
+        if not ok:
+            continue
+        fair = dict(zip(order, devig(*[sharp_px[sd] for sd in order])))
+        for sd in order:
+            if not sides[sd]["square"]:
+                continue
+            bk, am = max(sides[sd]["square"], key=lambda ba: am_to_dec(ba[1]))
+            ev = fair[sd] * am_to_dec(am) - 1.0
+            if ev >= min_ev:
+                edges.append({
+                    "game_id": gid, "home": meta[(gid, gkey)][0], "away": meta[(gid, gkey)][1],
+                    "market": _group_label(gkey), "side": sd, "tag_family": gkey[2],
+                    "square_book": bk, "square_am": am,
+                    "fair_prob": round(fair[sd], 4), "fair_am": round(fair_am(fair[sd])),
+                    "sharp_am": round(sharp_px[sd]), "ev": round(ev, 4),
+                })
+    edges.sort(key=lambda e: -e["ev"])
+    return edges
+
+
+def _report_edges(events, top=15):
+    """Print the top sharp-vs-square edges across every derivative family."""
+    rows = derivative_rows(events)
+    edges = cross_book_edges(rows)
+    if not edges:
+        print("  no square price beats the sharp fair line by >= 2% EV on this board.")
+        return
+    print(f"  ! {len(edges)} cross-book edge(s) (square beats sharp fair, EV >= 2%); top {min(top, len(edges))}:")
+    for e in edges[:top]:
+        print(f"    {e['ev']*100:+5.1f}% EV  {e['home']} v {e['away']:14}  "
+              f"{e['market']} {e['side']:10} {e['square_book']} {e['square_am']:+d} "
+              f"(fair {e['fair_am']:+d})")
 
 
 if __name__ == "__main__":
