@@ -224,8 +224,12 @@ def _op_key() -> str:
     return k
 
 
-def _op_get(path: str, **params):
-    """GET an OddsPapi v4 endpoint with the apiKey param + a polite cooldown."""
+def _op_get(path: str, _optional: bool = False, **params):
+    """GET an OddsPapi v4 endpoint with the apiKey param + a polite cooldown.
+
+    With _optional=True a per-resource HTTP error (e.g. a bookmaker that doesn't
+    cover this tournament -> 404, or isn't in your plan -> 403) returns None and
+    a warning instead of aborting, so one bad book can't kill a multi-book run."""
     params["apiKey"] = _op_key()
     url = f"{OP_HOST}{path}?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers={"User-Agent": "wc-pricing-desk/1.0",
@@ -239,8 +243,15 @@ def _op_get(path: str, **params):
                      "test with: curl \"%s\"" % url.replace(params['apiKey'], 'YOUR_KEY'),
                 403: "your plan does not include this endpoint/bookmaker.",
                 429: "rate limited — increase OP_COOLDOWN."}.get(e.code, "")
+        if _optional:
+            print(f"  ! OddsPapi {path} -> HTTP {e.code} (skipped). {hint}", file=sys.stderr)
+            time.sleep(OP_COOLDOWN)
+            return None
         sys.exit(f"OddsPapi {path} -> HTTP {e.code}. {hint}\n{body}")
     except urllib.error.URLError as e:
+        if _optional:
+            print(f"  ! OddsPapi {path} -> network error: {e.reason} (skipped)", file=sys.stderr)
+            return None
         sys.exit(f"OddsPapi {path} -> network error: {e.reason}")
     time.sleep(OP_COOLDOWN)
     return data
@@ -322,7 +333,53 @@ def _parse_book_markets(markets: dict) -> dict:
                   for ln, v in sorted(lines.items()) if "over" in v and "under" in v]
         if totals:
             book["totals"] = totals
+    elif m1:
+        # No normalized O/U market (106). Some feeds (e.g. Pinnacle via OddsPapi)
+        # instead pass each total line through as its own native market. Anchor to
+        # the 1X2 market's group+fixture+period so we read FULL-MATCH GOAL totals
+        # only — never corners/cards (other groups) or half lines (other periods).
+        totals = _full_match_goal_totals(markets, m1)
+        if totals:
+            book["totals"] = totals
     return book
+
+
+def _path_parts(market_obj) -> list[str]:
+    """OddsPapi/Pinnacle bookmakerMarketId path, e.g.
+    'line/29/2686/1632123645/3650644548/0/totals' ->
+    [prefix, sport, group, fixture, segment, ..., period, type]. group=parts[2],
+    fixture=parts[3], period=parts[-2], market type=parts[-1] (consistent across
+    'line/' (7 parts) and 'altLine/' (8 parts) forms)."""
+    return str((market_obj or {}).get("bookmakerMarketId", "")).split("/")
+
+
+def _full_match_goal_totals(markets: dict, m1: dict) -> list[dict]:
+    """Collect full-match goal over/under lines from a Pinnacle-style market map.
+
+    The 1X2 market (m1) fixes the goal market's group+fixture; we take every
+    '.../totals' market in that same group+fixture whose period is '0' (full
+    match) and whose outcomes are bare '<line>/over' | '<line>/under' (so team
+    totals 'home/0.5/over' and spreads '1.25/home' are excluded)."""
+    p = _path_parts(m1)
+    if len(p) < 5 or p[-1] != "moneyline" or p[-2] != "0":
+        return []
+    group, fixture = p[2], p[3]
+    lines: dict[float, dict] = {}
+    for m in markets.values():
+        pp = _path_parts(m)
+        if len(pp) < 5 or pp[-1] != "totals" or pp[-2] != "0":
+            continue
+        if pp[2] != group or pp[3] != fixture:
+            continue
+        for oc in m.get("outcomes", {}).values():
+            for pl in oc.get("players", {}).values():
+                mt = re.match(r"\s*(\d+(?:\.\d+)?)/(over|under)\s*$",
+                              str(pl.get("bookmakerOutcomeId", "")).lower())
+                px = _dec(pl)
+                if mt and px is not None:
+                    lines.setdefault(float(mt.group(1)), {})[mt.group(2)] = px
+    return [{"line": ln, "over": v["over"], "under": v["under"]}
+            for ln, v in sorted(lines.items()) if "over" in v and "under" in v]
 
 
 def discover_tournaments(substr: str | None = None):
@@ -375,8 +432,13 @@ def live_feed(args) -> list[dict]:
 
     fixtures: dict[str, dict] = {}
     no_total = 0
+    used_books = []
     for bk in books:
-        rows = _op_get("/v4/odds-by-tournaments", bookmaker=bk, tournamentIds=tids, oddsFormat="american")
+        rows = _op_get("/v4/odds-by-tournaments", _optional=True,
+                       bookmaker=bk, tournamentIds=tids, oddsFormat="american")
+        if not rows:
+            continue
+        used_books.append(bk)
         for fix in rows:
             bo = fix.get("bookmakerOdds", {}).get(bk)
             if not bo or bo.get("suspended"):
@@ -403,7 +465,9 @@ def live_feed(args) -> list[dict]:
         with open(args.save_raw, "w") as f:
             json.dump(events, f, indent=2)
         print(f"  saved {len(events)} normalized events -> {args.save_raw}", file=sys.stderr)
-    print(f"Fetched {len(events)} fixtures across {len(books)} book(s): {', '.join(books)}", file=sys.stderr)
+    skipped = [b for b in books if b not in used_books]
+    print(f"Fetched {len(events)} fixtures across {len(used_books)} book(s): {', '.join(used_books)}"
+          + (f"  (skipped: {', '.join(skipped)})" if skipped else ""), file=sys.stderr)
     return events
 
 

@@ -139,7 +139,7 @@ with st.sidebar:
     api_key = st.text_input(
         "ODDSPAPI_KEY",
         type="password",
-        placeholder="e3686218-43c0-4fe9-bf33-20769bb6923d",
+        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
         help="Your OddsPapi key. Never shared. Only used for live calls."
     )
 
