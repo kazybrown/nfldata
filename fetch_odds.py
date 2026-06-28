@@ -58,6 +58,33 @@ ODDS_OUT = "wc_odds_latest.csv"
 DERIV_OUT = "wc_book_derivatives_latest.csv"
 PREFERRED_BOOK = "pinnacle"
 
+# Book taxonomy for the sharp-vs-square edge hunt. Anything not listed sharp is
+# treated as square (recreational / public money). Used to tag every derivative
+# row so the cross-book comparison knows which side of the market each price is.
+SHARP_BOOKS = {"pinnacle", "pinnacle2", "bookmaker.eu", "circasports",
+               "betonline.ag", "lowvig.ag"}
+SQUARE_BOOKS = {"draftkings", "fanduel", "betmgm", "caesars", "betway",
+                "williamhill", "unibet", "bovada.lv", "bodog.eu", "mybookie.ag"}
+# Default board: the user's sharps that carry odds + the recreational squares
+# that do. (betonline/lowvig + bovada/bodog/mybookie are requested but currently
+# return no odds for the WC; harmless to request — they're skipped if empty.)
+DEFAULT_BOOKS = ("pinnacle,bookmaker.eu,circasports,betonline.ag,lowvig.ag,"
+                 "draftkings,fanduel,betmgm,caesars,betway,williamhill,unibet")
+
+# OddsPapi normalizes each total/spread/teamTotal/moneyline market under a
+# bookmakerMarketId path 'line|altLine/<sport>/<group>/<fixture>/<seg>/<period>/<type>'.
+# The group id names the market family; the period names the segment. These are
+# stable across the soccer feed; unknown groups fall back to 'grp<id>'.
+CATEGORY_MAP = {"2686": "goals", "8581": "corners", "201691": "cards"}
+PERIOD_MAP = {"0": "ft", "1": "1h", "2": "2h"}
+# native bookmakerMarketId type -> our short market_type label
+_MTYPE = {"moneyline": "1x2", "totals": "total", "spreads": "ah", "teamTotal": "teamtotal"}
+
+
+def book_tag(bk: str) -> str:
+    """'sharp' or 'square' for a bookmaker key (square is the default)."""
+    return "sharp" if bk in SHARP_BOOKS else "square"
+
 
 # --------------------------------------------------------------------------- #
 # Feed normalization
@@ -109,14 +136,13 @@ def _normalize_ah_to_home(line: float, side: str) -> float:
     return line if side == "home" else -line
 
 
-def normalize_event(ev: dict) -> tuple[dict, list[dict]]:
-    """Turn one raw event into (main_row, [derivative_rows])."""
+def normalize_event(ev: dict) -> dict:
+    """Turn one raw event into the main-board row (1X2 + total, devigged)."""
     books = ev.get("books", {})
     src, ham, dam, aam = _main_1x2(books)
     total, tsrc = _main_total(books)
     ph, pd, pa = devig(ham, dam, aam)
-
-    main = {
+    return {
         "game_id": ev["game_id"], "stage": ev.get("stage", ""),
         "home": ev["home"], "away": ev["away"],
         "home_am": round(ham), "draw_am": round(dam), "away_am": round(aam),
@@ -125,42 +151,45 @@ def normalize_event(ev: dict) -> tuple[dict, list[dict]]:
         "devig_away": round(pa, 4),
     }
 
-    derivs = []
-    for bk, mk in books.items():
-        if "btts" in mk:
-            derivs.append({
-                "game_id": ev["game_id"], "book": bk, "market": "btts_yes",
-                "am": round(dec_to_am(mk["btts"]["yes"])),
-            })
-            derivs.append({
-                "game_id": ev["game_id"], "book": bk, "market": "btts_no",
-                "am": round(dec_to_am(mk["btts"]["no"])),
-            })
-        for t in mk.get("totals", []):
-            derivs.append({
-                "game_id": ev["game_id"], "book": bk,
-                "market": f"over_{t['line']}", "am": round(dec_to_am(t["over"])),
-            })
-            derivs.append({
-                "game_id": ev["game_id"], "book": bk,
-                "market": f"under_{t['line']}", "am": round(dec_to_am(t["under"])),
-            })
-    return main, derivs
+
+DERIV_FIELDS = ["game_id", "home", "away", "book", "tag", "category", "period",
+                "market_type", "line", "side", "american", "market"]
+
+
+def derivative_rows(events: list[dict]) -> list[dict]:
+    """Flatten every book's derivative legs across all events into CSV rows.
+    Uses each book's pre-extracted 'derivs' (live) or synthesizes them from a
+    simple {btts, totals} book dict (mock / --file)."""
+    rows = []
+    for ev in events:
+        gid, home, away = ev["game_id"], ev.get("home", ""), ev.get("away", "")
+        for bk, mk in ev.get("books", {}).items():
+            tag = mk.get("tag", book_tag(bk))
+            legs = mk.get("derivs")
+            if legs is None:
+                legs = _legacy_derivs(mk)
+            for d in legs:
+                rows.append({
+                    "game_id": gid, "home": home, "away": away, "book": bk, "tag": tag,
+                    "category": d["category"], "period": d["period"],
+                    "market_type": d["market_type"],
+                    "line": ("" if d.get("line") is None else f"{d['line']:g}"),
+                    "side": d["side"], "american": d["am"],
+                    "market": deriv_market_label(d),
+                })
+    return rows
 
 
 def write_outputs(events: list[dict], odds_out=ODDS_OUT, deriv_out=DERIV_OUT):
-    mains, derivs = [], []
-    for ev in events:
-        m, d = normalize_event(ev)
-        mains.append(m)
-        derivs.extend(d)
+    mains = [normalize_event(ev) for ev in events]
+    derivs = derivative_rows(events)
 
     with open(odds_out, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(mains[0].keys()))
         w.writeheader()
         w.writerows(mains)
     with open(deriv_out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["game_id", "book", "market", "am"])
+        w = csv.DictWriter(f, fieldnames=DERIV_FIELDS)
         w.writeheader()
         w.writerows(derivs)
     return len(mains), len(derivs)
@@ -382,6 +411,126 @@ def _full_match_goal_totals(markets: dict, m1: dict) -> list[dict]:
             for ln, v in sorted(lines.items()) if "over" in v and "under" in v]
 
 
+# --------------------------------------------------------------------------- #
+# Rich derivative extraction (corners / cards / halftime / spreads / team tot.)
+#
+# OddsPapi assigns each market a NORMALIZED key (the markets-dict key, e.g. 101
+# = 1X2, 1010 = O/U 2.5). Those keys are stable across bookmakers, but only the
+# sharp books (Pinnacle) carry a readable bookmakerOutcomeId that says what each
+# key MEANS ('2.5/over', 'home/0.5/under', '-0.5/home'). So we build a key ->
+# (category, period, market_type, line, side) dictionary from the richest book
+# in a fixture, then apply it to EVERY book by key — giving the same derivative
+# ladder (goals/corners/cards x FT/HT x total/AH/team-total/1X2/BTTS) for sharp
+# and square alike, fully comparable.
+# --------------------------------------------------------------------------- #
+def _parse_boid(mtype: str, boid: str):
+    """(side, line) for one outcome, parsed from its bookmakerOutcomeId.
+    Returns (None, None) for anything that doesn't match the expected shape."""
+    boid = boid.strip().lower()
+    if mtype == "moneyline":
+        return (boid, None) if boid in ("home", "draw", "away") else (None, None)
+    if mtype == "totals":
+        m = re.match(r"(-?\d+(?:\.\d+)?)/(over|under)$", boid)
+        return (m.group(2), float(m.group(1))) if m else (None, None)
+    if mtype == "teamTotal":
+        m = re.match(r"(home|away)/(-?\d+(?:\.\d+)?)/(over|under)$", boid)
+        return (f"{m.group(1)}_{m.group(3)}", float(m.group(2))) if m else (None, None)
+    if mtype == "spreads":
+        m = re.match(r"(-?\d+(?:\.\d+)?)/(home|away)$", boid)
+        if not m:
+            return (None, None)
+        side, line = m.group(2), float(m.group(1))
+        # The boid handicap is quoted from the HOME perspective; express it from
+        # the bet side's own perspective so 'away_+0.5' means away +0.5.
+        return side, (line if side == "home" else -line)
+    return (None, None)
+
+
+def build_keydict(markets: dict) -> dict:
+    """key -> {category, period, market_type, outcomes:{outcome_key:{side,line}}}
+    from a readable book's market map (Pinnacle). Covers the normalized flat
+    markets (101 = 1X2, 104 = BTTS) and every path-encoded total/spread/teamTotal/
+    moneyline across the goals / corners / cards families and FT / 1H / 2H."""
+    kd = {}
+    if "101" in markets:
+        kd["101"] = {"category": "goals", "period": "ft", "market_type": "1x2",
+                     "outcomes": {"101": {"side": "home", "line": None},
+                                  "102": {"side": "draw", "line": None},
+                                  "103": {"side": "away", "line": None}}}
+    if "104" in markets:
+        kd["104"] = {"category": "goals", "period": "ft", "market_type": "btts",
+                     "outcomes": {"104": {"side": "yes", "line": None},
+                                  "105": {"side": "no", "line": None}}}
+    for K, m in markets.items():
+        p = _path_parts(m)
+        if len(p) < 5 or p[-1] not in _MTYPE:
+            continue
+        native = p[-1]
+        category = CATEGORY_MAP.get(p[2], f"grp{p[2]}")
+        period = PERIOD_MAP.get(p[-2], p[-2])
+        outcomes = {}
+        for O, oc in m.get("outcomes", {}).items():
+            side, line = _parse_boid(native, str((_player(oc) or {}).get("bookmakerOutcomeId", "")))
+            if side is not None:
+                outcomes[O] = {"side": side, "line": line}
+        if outcomes:
+            kd[K] = {"category": category, "period": period,
+                     "market_type": _MTYPE[native], "outcomes": outcomes}
+    return kd
+
+
+def extract_derivs(markets: dict, keydict: dict) -> list[dict]:
+    """Apply a keydict to one book's markets -> list of priced derivative legs
+    {category, period, market_type, line, side, am}. American odds, rounded."""
+    out = []
+    for K, meta in keydict.items():
+        mk = markets.get(K)
+        if not mk:
+            continue
+        ocs = mk.get("outcomes", {})
+        for O, od in meta["outcomes"].items():
+            px = _dec(_player(ocs.get(O)))
+            if px is None:
+                continue
+            out.append({"category": meta["category"], "period": meta["period"],
+                        "market_type": meta["market_type"], "line": od["line"],
+                        "side": od["side"], "am": round(dec_to_am(px))})
+    return out
+
+
+def _legacy_derivs(book: dict) -> list[dict]:
+    """Synthesize derivative legs from a simple {btts, totals} book dict (mock /
+    --file feeds that never went through the OddsPapi key scheme)."""
+    out = []
+    if "btts" in book:
+        out.append({"category": "goals", "period": "ft", "market_type": "btts",
+                    "line": None, "side": "yes", "am": round(dec_to_am(book["btts"]["yes"]))})
+        out.append({"category": "goals", "period": "ft", "market_type": "btts",
+                    "line": None, "side": "no", "am": round(dec_to_am(book["btts"]["no"]))})
+    for t in book.get("totals", []):
+        out.append({"category": "goals", "period": "ft", "market_type": "total",
+                    "line": float(t["line"]), "side": "over", "am": round(dec_to_am(t["over"]))})
+        out.append({"category": "goals", "period": "ft", "market_type": "total",
+                    "line": float(t["line"]), "side": "under", "am": round(dec_to_am(t["under"]))})
+    return out
+
+
+def deriv_market_label(d: dict) -> str:
+    """Compact market label for one leg. BTTS keeps the legacy 'btts_yes'/'btts_no'
+    spelling so existing consumers (the app's edge scan) keep working."""
+    if d["market_type"] == "btts":
+        return f"btts_{d['side']}"
+    base = f"{d['category']}_{d['period']}_{d['market_type']}"
+    if d.get("side"):
+        base += f"_{d['side']}"
+    if d.get("line") is not None:
+        line = d["line"] + 0.0 or 0.0          # normalise -0.0 -> 0.0
+        # Asian-handicap lines are signed (the side's own perspective); show the
+        # sign explicitly. Total/team-total lines are magnitudes (over/under).
+        base += f"_{line:+g}" if d["market_type"] == "ah" else f"_{line:g}"
+    return base
+
+
 def discover_tournaments(substr: str | None = None):
     """List soccer tournaments (optionally filtered) so you can find the World Cup id."""
     tours = _op_get("/v4/tournaments", sportId=OP_SOCCER)
@@ -430,37 +579,66 @@ def live_feed(args) -> list[dict]:
     names = _op_get("/v4/participants", sportId=OP_SOCCER)   # {id: name}
     books = [b.strip() for b in (getattr(args, "bookmakers", None) or "pinnacle").split(",") if b.strip()]
 
-    fixtures: dict[str, dict] = {}
-    no_total = 0
+    # --- Pass 1: collect each book's RAW markets per fixture (with retries; the
+    #             odds-by-tournaments endpoint 404s intermittently per book). --- #
+    raw: dict[str, dict] = {}          # fixtureId -> {book: markets}
+    meta: dict[str, dict] = {}         # fixtureId -> {home, away}
     used_books = []
     for bk in books:
-        rows = _op_get("/v4/odds-by-tournaments", _optional=True,
-                       bookmaker=bk, tournamentIds=tids, oddsFormat="american")
+        rows = None
+        for attempt in range(4):
+            rows = _op_get("/v4/odds-by-tournaments", _optional=True,
+                           bookmaker=bk, tournamentIds=tids, oddsFormat="american")
+            if rows:
+                break
+            time.sleep(1.0 * (attempt + 1))
         if not rows:
             continue
-        used_books.append(bk)
+        got = False
         for fix in rows:
             bo = fix.get("bookmakerOdds", {}).get(bk)
-            if not bo or bo.get("suspended"):
-                continue
-            parsed = _parse_book_markets(bo.get("markets", {}))
-            if not parsed:
+            if not bo or bo.get("suspended") or not bo.get("markets"):
                 continue
             fid = fix["fixtureId"]
-            h = names.get(str(fix.get("participant1Id")), str(fix.get("participant1Id")))
-            a = names.get(str(fix.get("participant2Id")), str(fix.get("participant2Id")))
-            ev = fixtures.setdefault(fid, {"game_id": fid, "stage": "", "home": h, "away": a, "books": {}})
+            raw.setdefault(fid, {})[bk] = bo["markets"]
+            meta.setdefault(fid, {
+                "home": names.get(str(fix.get("participant1Id")), str(fix.get("participant1Id"))),
+                "away": names.get(str(fix.get("participant2Id")), str(fix.get("participant2Id")))})
+            got = True
+        if got:
+            used_books.append(bk)
+
+    # --- Pass 2: per fixture, build the key-dictionary from the richest sharp
+    #             book present (Pinnacle preferred), then extract every book's
+    #             derivative ladder + the main-board markets through it. --------- #
+    fixtures: dict[str, dict] = {}
+    no_total = 0
+    for fid, bookmarks in raw.items():
+        dict_src = next((bookmarks[b] for b in (PREFERRED_BOOK, *SHARP_BOOKS) if b in bookmarks),
+                        next(iter(bookmarks.values())))
+        keydict = build_keydict(dict_src)
+        ev = {"game_id": fid, "stage": "", "home": meta[fid]["home"],
+              "away": meta[fid]["away"], "books": {}}
+        for bk, markets in bookmarks.items():
+            parsed = _parse_book_markets(markets)          # h2h/btts/totals for main board
+            parsed["tag"] = book_tag(bk)
+            parsed["derivs"] = extract_derivs(markets, keydict)
             ev["books"][bk] = parsed
             if "totals" not in parsed:
                 no_total += 1
+        if ev["books"]:
+            fixtures[fid] = ev
 
     events = list(fixtures.values())
     if not events:
         sys.exit("No fixtures with odds returned — is the tournament in-season and the bookmaker active?")
     if no_total:
-        print(f"  ! {no_total} book-fixture(s) returned no parseable total — inspect a raw payload "
-              f"(--save-raw) and adjust _total_line if needed (the sharp anchor needs the total).",
+        print(f"  ! {no_total} book-fixture(s) carry no full-match goal total (square books often "
+              f"only post 1X2/BTTS) — the sharp anchor (Pinnacle) supplies the main-board total.",
               file=sys.stderr)
+    n_deriv = sum(len(mk.get("derivs", [])) for ev in events for mk in ev["books"].values())
+    print(f"  extracted {n_deriv} derivative legs "
+          f"(goals/corners/cards x ft/1h x 1X2/total/AH/team-total/BTTS)", file=sys.stderr)
     if getattr(args, "save_raw", None):
         with open(args.save_raw, "w") as f:
             json.dump(events, f, indent=2)
@@ -485,8 +663,9 @@ def main(argv=None):
     ap.add_argument("--tournament-id", default=None,
                     help="exact OddsPapi tournamentId(s), comma-separated — "
                          "contamination-proof; the real WC knockout board is 16")
-    ap.add_argument("--bookmakers", default="pinnacle",
-                    help="comma-separated bookmakers for live mode (default: pinnacle = sharp anchor)")
+    ap.add_argument("--bookmakers", default=DEFAULT_BOOKS,
+                    help="comma-separated bookmakers for live mode (default: sharps "
+                         "Pinnacle/Bookmaker.eu/Circa/BetOnline/LowVig + recreational squares)")
     ap.add_argument("--save-raw", help="also dump the normalized live feed to this JSON path")
     args = ap.parse_args(argv)
 

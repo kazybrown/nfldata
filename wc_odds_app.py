@@ -128,12 +128,20 @@ with st.sidebar:
         help="16 = Real 2026 World Cup knockout board (as configured in fetch_odds.py)"
     )
 
-    default_books = ["pinnacle", "bovada", "mybookie", "everygame"]
+    # Sharp = sharp/originating books; the rest are recreational "square" books.
+    # Pinnacle/Bookmaker.eu/Circa carry the full derivative ladder (incl. corners,
+    # cards, halftime); the squares supply the other side of the cross-book edge.
+    sharp_books = ["pinnacle", "bookmaker.eu", "circasports", "betonline.ag", "lowvig.ag"]
+    square_books = ["draftkings", "fanduel", "betmgm", "caesars", "betway",
+                    "williamhill", "unibet", "bovada.lv", "bodog.eu", "mybookie.ag"]
+    default_books = ["pinnacle", "bookmaker.eu", "circasports", "draftkings",
+                     "fanduel", "betmgm", "caesars", "betway", "williamhill", "unibet"]
     bookmakers = st.multiselect(
-        "Bookmakers",
-        options=["pinnacle", "bovada", "mybookie", "everygame", "draftkings", "fanduel", "caesars", "bet365"],
+        "Bookmakers (sharp ⚓ + square)",
+        options=sharp_books + square_books,
         default=default_books,
-        help="Pinnacle is used as the sharp anchor when available."
+        help="Sharp (Pinnacle/Bookmaker.eu/Circa/BetOnline/LowVig) vs square (recreational) "
+             "books. Pinnacle is the anchor; books that return no odds are skipped automatically."
     )
 
     api_key = st.text_input(
